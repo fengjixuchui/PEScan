@@ -3,6 +3,7 @@
 #include <strsafe.h>
 #include <atlbase.h>
 #include <dia2.h>
+#include <assert.h>
 #include <string>
 #include <algorithm>
 #include <functional>
@@ -62,6 +63,32 @@ public:
     half_char = -1;
   }
 };
+
+void bstream_test() {
+  const unsigned char expected_output[] = {
+    0xE3, 0x83, 0xA4, 0xE3, 0x82, 0xB5, 0xE3, 0x82,
+    0xA4, 0xE3, 0x83, 0x9E, 0xE3, 0x82, 0xB7, 0xE3,
+    0x82, 0xAB, 0xE3, 0x83, 0xA9, 0xE3, 0x83, 0xA1,
+  };
+  const char input_data[] =
+    "E3 83 A4 E3 82 B5 E3 82\t"
+    "a4:e3:83:9e:E3:82:B7:E3\n"
+    "82ABe383a9e383A1";
+  const wchar_t input_dataw[] =
+    L"E3 83 A4 E3 82 B5 E3 82\t"
+    L"a4:e3:83:9e:E3:82:B7:E3\n"
+    L"82ABe383a9e383A1";
+
+  bstream<std::string> bs;
+  bs << input_data;
+  auto s = bs.get();
+  assert(memcmp(s.data(), expected_output, sizeof(expected_output)) == 0);
+
+  bstream<std::wstring> wbs;
+  wbs << input_dataw;
+  s = bs.get();
+  assert(memcmp(s.data(), expected_output, sizeof(expected_output)) == 0);
+}
 
 class PE {
 private:
@@ -323,6 +350,9 @@ int wmain(int argc, wchar_t *argv[]) {
                   s);
       CoUninitialize();
     }
+  }
+  else if (argc == 2 && _wcsicmp(argv[1], L"test") == 0) {
+    bstream_test();
   }
   else {
     Log(L"USAGE: PESCAN <PE> <pattern> [Symbol location]\n\n"
