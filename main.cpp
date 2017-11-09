@@ -3,9 +3,10 @@
 #include <strsafe.h>
 #include <atlbase.h>
 #include <dia2.h>
-#include <vector>
+#include <string>
 #include <algorithm>
 #include <functional>
+#include <sstream>
 
 #define Log wprintf
 
@@ -16,6 +17,51 @@ void LogDebug(LPCWSTR format, ...) {
   StringCbVPrintf(linebuf, sizeof(linebuf), format, v);
   OutputDebugString(linebuf);
 }
+
+template<class ST>
+class bstream {
+private:
+  std::stringstream ss_;
+  int half_char;
+
+public:
+  bstream() : half_char(-1) {}
+
+  void operator << (const ST &line) {
+    for (auto c : line) {
+      *this << c;
+    }
+  }
+
+  void operator <<(int c) {
+    int h = 0;
+    if (c >= '0' && c <= '9')
+      h = c - '0';
+    else if (c >= 'A' && c <= 'F')
+      h = c - 'A' + 10;
+    else if (c >= 'a' && c <= 'f')
+      h = c - 'a' + 10;
+    else
+      return;
+
+    if (half_char < 0) {
+      half_char = h;
+    }
+    else {
+      ss_ << static_cast<unsigned char>(half_char << 4 | h);
+      half_char = -1;
+    }
+  }
+
+  std::string get() const {
+    return ss_.str();
+  }
+
+  void flush() {
+    ss_.str("");
+    half_char = -1;
+  }
+};
 
 class PE {
 private:
@@ -107,7 +153,7 @@ public:
     return true;
   }
 
-  void Search(const std::vector<BYTE> &needle,
+  void Search(const std::string &needle,
               std::function<void(DWORD)> callback) {
     if (!code_) return;
 
@@ -115,18 +161,20 @@ public:
 
     auto section_start = As<BYTE>(code_->VirtualAddress);
     auto section_end = As<BYTE>(code_->VirtualAddress + code_->SizeOfRawData);
+    auto needle_start = reinterpret_cast<const unsigned char*>(needle.data());
+    auto needle_end = needle_start + needle.size();
     auto it = std::search(section_start,
                           section_end,
-                          needle.begin(),
-                          needle.end());
+                          needle_start,
+                          needle_end);
     while (it != section_end) {
       DWORD rva = static_cast<DWORD>(it - As<BYTE>(0));
       //Log(L"+%08x %02x %02x\n", rva, *it, *(it + 1));
       callback(rva);
       it = std::search(it + needle.size(),
                        section_end,
-                       needle.begin(),
-                       needle.end());
+                       needle_start,
+                       needle_end);
     }
   }
 };
@@ -208,7 +256,7 @@ public:
 
 void EnumSymbols(LPCWSTR exepath,
                  LPCWSTR symbol_path,
-                 const std::vector<BYTE> &pattern) {
+                 const std::string &pattern) {
   PE pe;
   if (pe.Load(exepath)) {
     CComPtr<IDiaSession> session;
@@ -240,19 +288,21 @@ void EnumSymbols(LPCWSTR exepath,
     }
 
     pe.Search(pattern, [&](DWORD rva) {
+      BSTR symbol_name = nullptr;
+      long displacement = 0;
       if (session) {
         CComPtr<IDiaSymbol> symbol;
-        long displacement = 0;
         if (SUCCEEDED(session->findSymbolByRVAEx(rva,
                                                  SymTagFunction,
                                                  &symbol,
                                                  &displacement))
             && symbol) {
-          BSTR name = nullptr;
-          if (SUCCEEDED(symbol->get_name(&name))) {
-            Log(L"+%08x\t%s+%x\n", rva, name, displacement);
-          }
+          symbol->get_name(&symbol_name);
         }
+      }
+
+      if (symbol_name) {
+        Log(L"+%08x\t%s +%x\n", rva, symbol_name, displacement);
       }
       else {
         Log(L"+%08x\n", rva);
@@ -263,17 +313,25 @@ void EnumSymbols(LPCWSTR exepath,
 }
 
 int wmain(int argc, wchar_t *argv[]) {
-  if (argc >= 2) {
+  if (argc >= 3) {
     if (SUCCEEDED(CoInitialize(nullptr))) {
-      std::vector<BYTE> stack_pivot = {0x94, 0xc3};
+      bstream<std::wstring> bs;
+      bs << argv[2];
+      auto s = bs.get();
       EnumSymbols(argv[1],
-                  argc >= 3 ? argv[2] : nullptr,
-                  stack_pivot);
+                  argc >= 4 ? argv[3] : nullptr,
+                  s);
       CoUninitialize();
     }
   }
   else {
-    Log(L"PESCAN <PE> [Symbol location]");
+    Log(L"USAGE: PESCAN <PE> <pattern> [Symbol location]\n\n"
+        L"Pattern examples:\n\n"
+        L"  <Stack Pivot>\n"
+        L"  94:c3 -- xchg eax,esp\n"
+        L"           ret\n\n"
+        L"  <Get x64 TEB address>\n"
+        L"  65488b042530000000 -- mov rax,qword ptr gs:[30h]\n");
   }
   return 0;
 }
