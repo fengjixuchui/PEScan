@@ -206,7 +206,7 @@ public:
   }
 };
 
-class DIACallbacks : public IDiaLoadCallback2 {
+class DIACallbacks : public IDiaLoadCallback {
 private:
   LONG ref_;
 public:
@@ -218,7 +218,6 @@ public:
                               _COM_Outptr_ void __RPC_FAR *__RPC_FAR *ppv) {
     static QITAB rgqit[] = {
       QITABENT(DIACallbacks, IDiaLoadCallback),
-      QITABENT(DIACallbacks, IDiaLoadCallback2),
       { 0 },
     };
     return QISearch(this, rgqit, riid, ppv);
@@ -241,43 +240,25 @@ public:
   STDMETHODIMP NotifyDebugDir(BOOL fExecutable,
                               DWORD cbData,
                               BYTE *pbData) {
-    return E_NOTIMPL;
+    return S_OK;
   }
 
   STDMETHODIMP NotifyOpenDBG(LPCOLESTR dbgPath,
                              HRESULT resultCode) {
-    return E_NOTIMPL;
+    return S_OK;
   }
 
   STDMETHODIMP NotifyOpenPDB(LPCOLESTR pdbPath,
                              HRESULT resultCode) {
-    return E_NOTIMPL;
+    return S_OK;
   }
 
   STDMETHODIMP RestrictRegistryAccess() {
-    return E_NOTIMPL;
+    return S_OK;
   }
 
   STDMETHODIMP RestrictSymbolServerAccess() {
-    return E_NOTIMPL;
-  }
-
-  // IDiaLoadCallback2
-
-  STDMETHODIMP RestrictOriginalPathAccess() {
-    return E_NOTIMPL;
-  }
-
-  STDMETHODIMP RestrictReferencePathAccess() {
-    return E_NOTIMPL;
-  }
-
-  STDMETHODIMP RestrictDBGAccess() {
-    return E_NOTIMPL;
-  }
-
-  STDMETHODIMP RestrictSystemRootAccess() {
-    return E_NOTIMPL;
+    return S_OK;
   }
 };
 
@@ -335,8 +316,19 @@ void EnumSymbols(LPCWSTR exepath,
         Log(L"+%08x\n", rva);
       }
     });
-
   }
+}
+
+static std::wstring GetEnv(LPCWSTR variable_name) {
+  std::wstring env;
+  DWORD required_length = GetEnvironmentVariable(variable_name, nullptr, 0);
+  if (auto buf = new wchar_t[required_length]) {
+    if (GetEnvironmentVariable(variable_name, buf, required_length)) {
+      env = buf;
+    }
+    delete [] buf;
+  }
+  return env;
 }
 
 int wmain(int argc, wchar_t *argv[]) {
@@ -344,10 +336,9 @@ int wmain(int argc, wchar_t *argv[]) {
     if (SUCCEEDED(CoInitialize(nullptr))) {
       bstream<std::wstring> bs;
       bs << argv[2];
-      auto s = bs.get();
-      EnumSymbols(argv[1],
-                  argc >= 4 ? argv[3] : nullptr,
-                  s);
+      const auto pattern_to_search = bs.get();
+      const auto symbol_path = GetEnv(L"_NT_SYMBOL_PATH");
+      EnumSymbols(argv[1], symbol_path.c_str(), pattern_to_search);
       CoUninitialize();
     }
   }
@@ -355,7 +346,9 @@ int wmain(int argc, wchar_t *argv[]) {
     bstream_test();
   }
   else {
-    Log(L"USAGE: PESCAN <PE> <pattern> [Symbol location]\n\n"
+    Log(L"USAGE: PESCAN <PE> <pattern>\n\n"
+        L"Set _NT_SYMBOL_PATH environment variable to get a symbol name for RVA,\n"
+        L"and place symsrv.exe in a directory that is visible from PESCAN.\n\n"
         L"Pattern examples:\n\n"
         L"  <Stack Pivot>\n"
         L"  94:c3 -- xchg eax,esp\n"

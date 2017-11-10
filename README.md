@@ -4,7 +4,7 @@ PEScan is a tool to search the code section of a given PE module for a specific 
 ### Sample output
 ```
 > bin\amd64\pescan.exe
-USAGE: PESCAN <PE> <pattern> [Symbol location]
+USAGE: PESCAN <PE> <pattern>
 
 Pattern examples:
 
@@ -15,14 +15,14 @@ Pattern examples:
   <Get x64 TEB address>
   65488b042530000000 -- mov rax,qword ptr gs:[30h]
 
-> bin\amd64\pescan.exe C:\Windows\system32\mshtml.dll 65488b042530000000 d:\symbols\mshtml.pdb\F4B04F95A05744D2A5E2AE9EEBB6C98D1
+> bin\amd64\pescan.exe C:\Windows\system32\mshtml.dll 65488b042530000000
 Start searching...
 +000a603a       MemProtectThreadContext::MemProtectThreadContext +6a
 +004ff8ce
 +004ff9b7
 +00f37f8b
 
-> bin\x86\pescan.exe C:\Windows\system32\jscript9.dll 94:c3 d:\symbols\jscript9.pdb\406FB365F3334FBCA0F9AA16D2CC91FC1
+> bin\x86\pescan.exe C:\Windows\system32\jscript9.dll 94:c3
 Start searching...
 +0007430b       Js::ByteCodeBufferBuilder::AddFunctionBody +db
 +00085270
