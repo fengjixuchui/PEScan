@@ -6,6 +6,9 @@ PEScan is a tool to search the code section of a given PE module for a specific 
 > bin\amd64\pescan.exe
 USAGE: PESCAN <PE> <pattern>
 
+Set _NT_SYMBOL_PATH environment variable to get a symbol name for RVA,
+and place symsrv.exe in a directory that is visible from PESCAN.
+
 Pattern examples:
 
   <Stack Pivot>
@@ -17,29 +20,28 @@ Pattern examples:
 
 > bin\amd64\pescan.exe C:\Windows\system32\mshtml.dll 65488b042530000000
 Start searching...
-+000a603a       MemProtectThreadContext::MemProtectThreadContext +6a
-+004ff8ce
-+004ff9b7
-+00f37f8b
++00039a56       mshtml!MemProtectThreadContext::MemProtectThreadContext +6a
++004fcb6e
++004fcc57
++00f378bb
 
-> bin\x86\pescan.exe C:\Windows\system32\jscript9.dll 94:c3
+> bin\amd64\pescan.exe C:\Windows\syswow64\jscript9.dll 94:c3
 Start searching...
-+0007430b       Js::ByteCodeBufferBuilder::AddFunctionBody +db
-+00085270
-+000c1a90       Lowerer::GenerateFastStElemI +1a2
-+000cde3d
-+000e1ae7
-+001116eb       PreVisitBlock +7d
-+00115883       Js::JavascriptLibrary::InitializeError +4d
-+0012a044       Recycler::Sweep +1e
-+0014c4a0
-+0014c8b7       NativeCodeGenerator::CodeGen +fa
-+001506db       Js::InterpreterStackFrame::DoProfiledSetProperty<Js::OpLayoutElementCP const > +bf
-+00151529       Js::InterpreterStackFrame::OP_ProfiledGetMethodProperty<Js::OpLayoutElementCP const > +7f
-+00151723       Js::InterpreterStackFrame::OP_ProfiledGetProperty<Js::OpLayoutElementCP const > +ac
-+0017494a       Js::JavascriptString::ToLocaleCaseHelper +2d
-+00180f44       Parser::ParseStmtListNoASTCore +24
-+001e734b
++0007fba0
++000a1974       jscript9!Parser::ParseStmtListNoASTCore +24
++000c0b72       jscript9!Js::JavascriptLibrary::InitializeError +4d
++000d3600
++000d3a17       jscript9!NativeCodeGenerator::CodeGen +fa
++000d783b       jscript9!Js::InterpreterStackFrame::DoProfiledSetProperty<Js::OpLayoutElementCP const > +bf
++000d8689       jscript9!Js::InterpreterStackFrame::OP_ProfiledGetMethodProperty<Js::OpLayoutElementCP const > +7f
++000d8883       jscript9!Js::InterpreterStackFrame::OP_ProfiledGetProperty<Js::OpLayoutElementCP const > +ac
++000e6c80       jscript9!Lowerer::GenerateFastStElemI +1a2
++000f301d
++00106c97
++00141224       jscript9!Recycler::Sweep +1e
++0016596b       jscript9!PreVisitBlock +7d
++0016e9db       jscript9!UnifiedRegex::ConcatNode::SupportsPrefixSkipping +2b
++0019af74       jscript9!Js::JavascriptString::ToLocaleCaseHelper +2d
++001e4bae
 ...
-
 ```

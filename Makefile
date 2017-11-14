@@ -16,6 +16,7 @@ TARGET=pescan.exe
 
 OBJS=\
 	$(OBJDIR)\main.obj\
+	$(OBJDIR)\filemapping.obj\
 
 LIBS=\
 	diaguids.lib\

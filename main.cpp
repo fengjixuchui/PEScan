@@ -8,15 +8,45 @@
 #include <algorithm>
 #include <functional>
 #include <sstream>
+#include "filemapping.h"
 
-#define Log wprintf
+static bool LogToDebugger = false;
 
-void LogDebug(LPCWSTR format, ...) {
+void Log(LPCWSTR format, ...) {
   WCHAR linebuf[1024];
   va_list v;
   va_start(v, format);
-  StringCbVPrintf(linebuf, sizeof(linebuf), format, v);
-  OutputDebugString(linebuf);
+  if (LogToDebugger) {
+    StringCbVPrintf(linebuf, sizeof(linebuf), format, v);
+    OutputDebugString(linebuf);
+  }
+  else {
+    vwprintf (format, v);
+  }
+  va_end(v);
+}
+
+std::wstring get_filename(const std::wstring path) {
+  auto back_slash = path.rfind(L'\\');
+  auto name_and_ext = back_slash == std::wstring::npos
+                    ? path
+                    : path.substr(back_slash + 1);
+  auto dot = name_and_ext.rfind(L'.');
+  auto name = dot == std::wstring::npos ? name_and_ext
+                                        : name_and_ext.substr(0, dot);
+  std::replace(name.begin(), name.end(), '.', '_');
+  return name;
+}
+
+void get_filename_test() {
+  assert(get_filename(L"C:\\Windows\\system32\\notepad.exe") == L"notepad");
+  assert(get_filename(L"notepad.exe") == L"notepad");
+  assert(get_filename(L"C:\\Windows\\System32\\Windows.Storage.ApplicationData.dll")
+         == L"Windows_Storage_ApplicationData");
+  assert(get_filename(L"notepad") == L"notepad");
+  assert(get_filename(L"") == L"");
+  assert(get_filename(L"\\") == L"");
+  assert(get_filename(L"\\\\") == L"");
 }
 
 template<class ST>
@@ -90,6 +120,19 @@ void bstream_test() {
   assert(memcmp(s.data(), expected_output, sizeof(expected_output)) == 0);
 }
 
+template <typename F>
+HRESULT ExceptionHandler(F danger_call) {
+  bool ret = false;
+  __try {
+    ret = danger_call();
+  }
+  __except(GetExceptionCode() == EXCEPTION_IN_PAGE_ERROR
+           ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+    SetLastError(GetExceptionCode());
+  }
+  return ret;
+}
+
 class PE {
 private:
   struct DOS_Header {
@@ -112,71 +155,91 @@ private:
     short oem_info;
     short reserved2[10];
     long  e_lfanew;
-  } *dos_;
+  };
 
-  HMODULE imagebase_;
+  FileMapping mapping_;
+  FileMapping::View view_;
   const IMAGE_SECTION_HEADER *code_;
 
   void Release() {
-    if (imagebase_) {
-      FreeLibrary(imagebase_);
-      imagebase_ = nullptr;
-      code_ = nullptr;
-    }
+    code_ = nullptr;
+    view_ = FileMapping::View();
+    mapping_.Attach(nullptr);
   }
 
 public:
-  PE() : imagebase_(nullptr), code_(nullptr) {}
+  PE() : code_(nullptr) {}
 
   ~PE() {
     Release();
   }
 
-  template<typename T>
-  const T *As(DWORD offset) const {
-    return reinterpret_cast<T*>(reinterpret_cast<const PBYTE>(imagebase_) + offset);
-  }
-
   bool Load(LPCWSTR filename) {
-    imagebase_ = LoadLibrary(filename);
-    if (!imagebase_) {
-      Log(L"LoadLibrary failed - %08x", GetLastError());
+    Release();
+    if (mapping_.Create(filename,
+                        /*sectionName*/nullptr,
+                        /*mappingAreaSize*/{0},
+                        GENERIC_READ,
+                        PAGE_READONLY)) {
+      view_ = mapping_.CreateMappedView(FILE_MAP_READ,
+                                        /*offset*/0,
+                                        /*sizeToMap*/0);
+    }
+    if (!view_)
       return false;
-    }
 
-    DWORD offset = 0;
-    auto dos = As<DOS_Header>(offset);
-    offset += dos->e_lfanew;
-    offset += 4; // PE signature
-
-    auto header = As<IMAGE_FILE_HEADER>(offset);
-    offset += sizeof(IMAGE_FILE_HEADER);
-    if (header->Machine == IMAGE_FILE_MACHINE_I386) {
-      offset += sizeof(IMAGE_OPTIONAL_HEADER32);
-    }
-    else if (header->Machine == IMAGE_FILE_MACHINE_AMD64) {
-      offset += sizeof(IMAGE_OPTIONAL_HEADER64);
-    }
-    else {
-      Log(L"Unsupported architecture.");
-      return false;
-    }
-
-    for (int i = 0; i < header->NumberOfSections; ++i) {
-      auto section = As<IMAGE_SECTION_HEADER>(offset);
-      /*
-      Log(L"Section#%02d %-8hs %08x\n",
-          i + 1,
-          reinterpret_cast<LPCSTR>(section->Name),
-          section->VirtualAddress);
-      */
-      const BYTE dot_text[] = {0x2e, 0x74, 0x65, 0x78, 0x74};
-      if (memcmp(section->Name, dot_text, sizeof(dot_text)) == 0) {
-        code_ = section;
-        break;
+    ExceptionHandler([&]() {
+      DWORD offset = 0;
+      auto dos = view_.As<DOS_Header>(offset);
+      if (dos->signature != 0x5a4d) {
+        Log(L"Bad DOS signature: %04x\n", dos->signature);
+        return false;
       }
-      offset += sizeof(IMAGE_SECTION_HEADER);
-    }
+
+      offset += dos->e_lfanew;
+
+      auto pe_signature = *view_.As<DWORD>(offset);
+      if (pe_signature != 0x4550) {
+        Log(L"Bad PE signature: %08x\n", pe_signature);
+        return false;
+      }
+      offset += 4; // PE signature
+
+      auto header = view_.As<IMAGE_FILE_HEADER>(offset);
+      offset += sizeof(IMAGE_FILE_HEADER);
+      if (header->Machine == IMAGE_FILE_MACHINE_I386) {
+        offset += sizeof(IMAGE_OPTIONAL_HEADER32);
+      }
+      else if (header->Machine == IMAGE_FILE_MACHINE_AMD64) {
+        offset += sizeof(IMAGE_OPTIONAL_HEADER64);
+      }
+      else {
+        Log(L"Unsupported architecture.");
+        return false;
+      }
+
+      static const BYTE dot_text[] = {0x2e, 0x74, 0x65, 0x78,
+                                      0x74, 0x00, 0x00, 0x00};
+      CHAR section_name[IMAGE_SIZEOF_SHORT_NAME + 1];
+      section_name[IMAGE_SIZEOF_SHORT_NAME] = 0;
+      for (int i = 0; i < header->NumberOfSections; ++i) {
+        const IMAGE_SECTION_HEADER *section = view_.As<IMAGE_SECTION_HEADER>(offset);
+        memcpy(section_name, section->Name, IMAGE_SIZEOF_SHORT_NAME);
+        /*
+        Log(L"Section#%02d %-8hs RVA +%08x File +%08x\n",
+            i + 1,
+            section_name,
+            section->VirtualAddress,
+            section->PointerToRawData);
+        */
+        if (memcmp(section->Name, dot_text, sizeof(dot_text)) == 0) {
+          code_ = section;
+          break;
+        }
+        offset += sizeof(IMAGE_SECTION_HEADER);
+      }
+      return true;
+    });
     return true;
   }
 
@@ -186,23 +249,26 @@ public:
 
     Log(L"Start searching...\n");
 
-    auto section_start = As<BYTE>(code_->VirtualAddress);
-    auto section_end = As<BYTE>(code_->VirtualAddress + code_->SizeOfRawData);
-    auto needle_start = reinterpret_cast<const unsigned char*>(needle.data());
-    auto needle_end = needle_start + needle.size();
-    auto it = std::search(section_start,
-                          section_end,
-                          needle_start,
-                          needle_end);
-    while (it != section_end) {
-      DWORD rva = static_cast<DWORD>(it - As<BYTE>(0));
-      //Log(L"+%08x %02x %02x\n", rva, *it, *(it + 1));
-      callback(rva);
-      it = std::search(it + needle.size(),
-                       section_end,
-                       needle_start,
-                       needle_end);
-    }
+    ExceptionHandler([&]() {
+      auto offset_to_rva = code_->VirtualAddress - code_->PointerToRawData;
+      auto section_start = view_.As<BYTE>(code_->PointerToRawData);
+      auto section_end = view_.As<BYTE>(code_->PointerToRawData + code_->SizeOfRawData);
+      auto needle_start = reinterpret_cast<const unsigned char*>(needle.data());
+      auto needle_end = needle_start + needle.size();
+      auto it = std::search(section_start,
+                            section_end,
+                            needle_start,
+                            needle_end);
+      while (it != section_end) {
+        const auto offset = static_cast<DWORD>(it - view_.As<BYTE>(0));
+        callback(offset + offset_to_rva);
+        it = std::search(it + needle.size(),
+                         section_end,
+                         needle_start,
+                         needle_end);
+      }
+      return true;
+    });
   }
 };
 
@@ -262,61 +328,67 @@ public:
   }
 };
 
-void EnumSymbols(LPCWSTR exepath,
+void EnumSymbols(LPCWSTR target_module,
                  LPCWSTR symbol_path,
                  const std::string &pattern) {
   PE pe;
-  if (pe.Load(exepath)) {
-    CComPtr<IDiaSession> session;
+  if (!pe.Load(target_module))
+    return;
 
-    if (symbol_path) {
-      CComPtr<IDiaDataSource> dia;
-      HRESULT hr = dia.CoCreateInstance(CLSID_DiaSource,
-                                        nullptr,
-                                        CLSCTX_INPROC_SERVER);
+  CComPtr<IDiaSession> session;
+
+  if (symbol_path) {
+    CComPtr<IDiaDataSource> dia;
+    HRESULT hr = dia.CoCreateInstance(CLSID_DiaSource,
+                                      nullptr,
+                                      CLSCTX_INPROC_SERVER);
+    if (SUCCEEDED(hr)) {
+      DIACallbacks callbacks;
+      hr = dia->loadDataForExe(target_module, symbol_path, &callbacks);
       if (SUCCEEDED(hr)) {
-        DIACallbacks callbacks;
-        hr = dia->loadDataForExe(exepath, symbol_path, &callbacks);
+        hr = dia->openSession(&session);
         if (SUCCEEDED(hr)) {
-          hr = dia->openSession(&session);
-          if (SUCCEEDED(hr)) {
-            ;
-          }
-          else {
-            Log(L"openSession failed - %08x\n", hr);
-          }
+          ;
         }
         else {
-          Log(L"loadDataForExe failed - %08x\n", hr);
+          Log(L"openSession failed - %08x\n", hr);
         }
       }
       else {
-        Log(L"CoCreateInstance(CLSID_DiaSource) failed - %08x\n", hr);
+        Log(L"loadDataForExe failed - %08x\n", hr);
+      }
+    }
+    else {
+      Log(L"CoCreateInstance(CLSID_DiaSource) failed - %08x\n", hr);
+    }
+  }
+
+  const auto module_name = get_filename(target_module);
+  pe.Search(pattern, [&](DWORD rva) {
+    BSTR symbol_name = nullptr;
+    long displacement = 0;
+    if (session) {
+      CComPtr<IDiaSymbol> symbol;
+      if (SUCCEEDED(session->findSymbolByRVAEx(rva,
+                                               SymTagFunction,
+                                               &symbol,
+                                               &displacement))
+          && symbol) {
+        symbol->get_name(&symbol_name);
       }
     }
 
-    pe.Search(pattern, [&](DWORD rva) {
-      BSTR symbol_name = nullptr;
-      long displacement = 0;
-      if (session) {
-        CComPtr<IDiaSymbol> symbol;
-        if (SUCCEEDED(session->findSymbolByRVAEx(rva,
-                                                 SymTagFunction,
-                                                 &symbol,
-                                                 &displacement))
-            && symbol) {
-          symbol->get_name(&symbol_name);
-        }
-      }
-
-      if (symbol_name) {
-        Log(L"+%08x\t%s +%x\n", rva, symbol_name, displacement);
-      }
-      else {
-        Log(L"+%08x\n", rva);
-      }
-    });
-  }
+    if (symbol_name) {
+      Log(L"+%08x\t%s!%s +%x\n",
+          rva,
+          module_name.c_str(),
+          symbol_name,
+          displacement);
+    }
+    else {
+      Log(L"+%08x\n", rva);
+    }
+  });
 }
 
 static std::wstring GetEnv(LPCWSTR variable_name) {
@@ -344,6 +416,7 @@ int wmain(int argc, wchar_t *argv[]) {
   }
   else if (argc == 2 && _wcsicmp(argv[1], L"test") == 0) {
     bstream_test();
+    get_filename_test();
   }
   else {
     Log(L"USAGE: PESCAN <PE> <pattern>\n\n"
